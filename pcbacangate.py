@@ -16,6 +16,19 @@ import logging
 import structlog
 
 
+import subprocess
+
+def run_command(command):
+    print (command)
+    result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode == 0:
+        print (result)
+        return result.stdout
+    else:
+        raise RuntimeError(f"Error executing command: {result.stderr}")
+
+
+
 def process_data():
     # Replace this with your data processing code
     print("Processing data...")
@@ -136,7 +149,7 @@ def main():
         lib4relind.set_relay(0,2,1)
         lib4relind.set_relay(0,3,1)
         lib4relind.set_relay(0,4,1)
-        time.sleep(3)
+        time.sleep(2)
         lib4relind.set_relay(0,1,0)
         lib4relind.set_relay(0,2,0)
         lib4relind.set_relay(0,3,0)
@@ -158,6 +171,35 @@ def main():
     finally:
         # Code that is always executed
         print("Continuing program")
+              
+
+    try:
+        # Bring down the interface
+        run_command("sudo ip link set can0 down")
+
+        # Set CAN parameters
+        run_command("sudo ip link set can0 up type can bitrate 500000 dbitrate 4000000 restart-ms 1000 berr-reporting on fd on sample-point .8 dsample-point .8 ")
+
+        # Change transmit queue length
+        run_command("sudo ifconfig can0 txqueuelen 65")
+
+        print("Commands executed successfully")
+
+    except Exception as e:
+                # This block will catch any exception
+            num_errors+=1
+            print(f"An error occurred: {e} while Setting UP CAN connection")
+
+            if (log_ok == 1):
+                    logger.info("log_error", event_description="An error occurred: while  Setting UP CAN connection", value=e)
+    else:
+        # Code to execute if no exceptions were raised
+            print("CAN  Setting UP succesfuly")
+            if (log_ok == 1):
+                    logger.info("log_event", event_description="CAN connection succesfuly tested", value=1)
+    finally:
+            # Code that is always executed
+            print("Continuing program")
 
     try:
 
@@ -167,13 +209,14 @@ def main():
         # many other interfaces are supported as well (see documentation)
         with can.Bus(interface='socketcan',
                     channel='can0',
-                    receive_own_messages=True) as bus:
+                    receive_own_messages=False,fd=True) as bus:
 
             # send a message
-            message = can.Message(arbitration_id=100, is_extended_id=True,
-                                    data=[0x11, 0x22, 0x33])
+            message = can.Message(arbitration_id=256, is_extended_id=True,is_fd=True,
+                                    data=[0x11, 0x22, 0x33,0x11, 0x22, 0x33,0x11, 0x22, 0x33,0x11, 0x22, 0x33])
             bus.send(message, timeout=0.2)
-
+            time.sleep(0.1)  # Added for demonstration; replace with actual work
+            bus.shutdown()  
             # iterate over received messages
             #for msg in bus:
             #    print(f"{msg.arbitration_id:X}: {msg.data}")
@@ -199,18 +242,15 @@ def main():
             print("Continuing program")
 
 
-    print("Press CTRL+C to stop...")
 
     #SI LLEGO AQUI EL EQUIPO ESTA LISTO
     #INICIA LOOP INFINITO
 
     def listen_for_exit_command():
-        input("Press Enter to stop...\n")
+        input("Press CTRL+C to stop...\n")
         global keep_running
         
         
-        keep_running = False
-
     keep_running = True
     exit_listener_thread = threading.Thread(target=listen_for_exit_command)
     exit_listener_thread.start()
@@ -223,14 +263,23 @@ def main():
 
             # Declare byte_array outside the database connection scope
             byte_array = []
-            
-            # lee las señales de entrada, el codigo y el trigger
-            inputs =lib4relind.get_opto_all(0)
-            #testing id and trigger
-            inputs = 3
-            #inputs = 5
-            #inputs = 7
+            inputs = 0
+       
+            try:
+                
 
+                # lee las señales de entrada, el codigo y el trigger
+                inputs =lib4relind.get_opto_all(0)
+                #testing id and trigger
+                inputs = 3
+                inputs = 5
+                #inputs = 7
+                lib4relind.set_relay_all(0,inputs)
+            except Exception as e:
+                print(f"An error occurred: {e} while Readin IO")
+                if (log_ok == 1):
+                    logger.info("log_error", event_description="An error occurred: while Reading IO", value=e)
+        
              # Define the variable
             id = 0  # or any other value you want to query for
             trigger = 0
@@ -269,14 +318,27 @@ def main():
             # many other interfaces are supported as well (see documentation)
                 with can.Bus(interface='socketcan',
                             channel='can0',
-                            receive_own_messages=True) as bus:
+                            receive_own_messages=False, fd=True) as bus:
 
                     # send a message
-                    message = can.Message(arbitration_id=100, is_extended_id=True,
+                    message = can.Message(arbitration_id=256, is_extended_id=False, is_fd=True,
                                             data=byte_array)
+                    bus.flush_tx_buffer()
+                    time.sleep(0.1)  
+
                     bus.send(message, timeout=0.2)
+                    time.sleep(0.1)  
 
-
+                    bus.shutdown()
+                    try:
+                        # lee las señales de entrada, el codigo y el trigger
+                        lib4relind.set_relay_all(0,inputs)
+                       
+                    except Exception as e:
+                        print(f"An error occurred: {e} while Readin IO")
+                        if (log_ok == 1):
+                            logger.error("log_error", event_description="An error occurred: while Reading IO", value=e)
+                
         print("Stopping gracefully...")
 
     except KeyboardInterrupt:
@@ -289,6 +351,8 @@ def main():
             print("Program terminated equipment not ready")
     # Wait for the exit command listener thread to finish
     exit_listener_thread.join()
+    lib4relind.set_relay_all(0,0)
+
     print("Program exited")
 
 
